@@ -209,6 +209,9 @@ idempotente (IDs fijos + `ON CONFLICT`): se puede ejecutar varias veces sin dupl
 | Diego Rojas | `diego@cordillera.example` | agent | ocupado |
 | Sofía Pardo | `sofia@cordillera.example` | agent | **desactivada** (no puede entrar) |
 
+**Sesión de widget de prueba** (cliente anónimo `b0000000-…-0003`): token `wgt_seed-anonimo-cordillera`.
+Volver a correr el seed la renueva por 30 días. La usa la demo del backend (`docs/demo-fase3.md`).
+
 **Base de conocimiento:** 11 artículos (bloqueo de tarjeta, cargo no reconocido,
 horarios, clave de la app, límites de transferencia, extractos, cajero que no entregó el
 dinero, PQR, compras internacionales): 9 publicados, 1 borrador y 1 archivado (estos dos
