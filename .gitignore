@@ -1,0 +1,4 @@
+# Nada especial: este repo solo tiene SQL, scripts y documentación.
+.env
+.DS_Store
+Thumbs.db
