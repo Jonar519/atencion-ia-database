@@ -295,8 +295,9 @@ se guardan (solo viajan por WebSocket).
   genera vectores deterministas de la misma dimensión. Cambiar de dimensión = migración
   nueva + re-indexar.
 
-**Aislamiento del RAG (decisión de diseño):** en `kb_chunks` **solo** hay contenido de la
-base de conocimiento. Los mensajes de los clientes **nunca** se convierten en embeddings
+**Aislamiento del RAG (decisión de diseño, garantizada por la base desde la migración 013):**
+en `kb_chunks` **solo** hay contenido de la base de conocimiento: un trigger rechaza cualquier
+fragmento que no sea subcadena literal del cuerpo vigente de su artículo. Los mensajes de los clientes **nunca** se convierten en embeddings
 ni se escriben en esa tabla, así que es imposible que el texto de un cliente aparezca
 como "contexto" en la respuesta a otro cliente. La búsqueda filtra además por artículos
 `published`. El historial de la conversación entra al prompt solo desde la propia
@@ -334,6 +335,7 @@ el canal de voz") y para el reporte de costos.
 | No se duplican embeddings de un artículo | UNIQUE en `kb_chunks` |
 | Correos únicos sin trampa de mayúsculas | CHECK `lower()` + UNIQUE |
 | Tokens guardados solo como hash | CHECK `^[0-9a-f]{64}$` |
+| En el índice del RAG solo hay texto literal de artículos (versión vigente, hash correcto) | Trigger `trg_kb_chunks_provenance` (013) |
 | `updated_at` siempre correcto | Trigger `set_updated_at()` |
 
 ## 5. Consultas previsibles → índices

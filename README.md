@@ -31,11 +31,13 @@ atencion-ia-database/
 │   ├── 009_calls.sql            # Llamadas (consentimiento, duración calculada, retención) y participantes
 │   ├── 010_messages.sql         # Mensajes (texto y voz), citas del RAG, transcripción de llamadas
 │   ├── 011_escalations.sql      # Escalamientos: un solo abierto por conversación
-│   └── 012_audit_and_usage.sql  # Log de auditoría y consumo de proveedores de IA/voz
+│   ├── 012_audit_and_usage.sql  # Log de auditoría y consumo de proveedores de IA/voz
+│   └── 013_kb_chunks_provenance.sql # Trigger: en el índice del RAG solo entra texto literal de artículos
 ├── seed/
 │   └── 001_seed.sql             # Datos de prueba: "Banco Cordillera" (ficticio)
 ├── tests/
-│   └── 001_constraints.sql      # 38 pruebas de las reglas del esquema (terminan en ROLLBACK)
+│   ├── 001_constraints.sql      # 38 pruebas de las reglas del esquema (terminan en ROLLBACK)
+│   └── 002_rag_provenance.sql   # 6 pruebas del aislamiento del RAG (trigger de la 013)
 ├── scripts/
 │   ├── migrate.bat / migrate.sh # Aplica las migraciones pendientes (cmd.exe · bash/CI)
 │   ├── seed.bat / seed.sh       # Carga los datos de prueba
@@ -83,7 +85,7 @@ scripts\seed.bat
 scripts\test.bat
 ```
 
-Salida esperada del paso 3 la primera vez: `Listo: 12 migracion(es) nueva(s)
+Salida esperada del paso 3 la primera vez: `Listo: 13 migracion(es) nueva(s)
 aplicada(s).` Las siguientes veces: `Listo: 0 ...` (las ya aplicadas se saltan).
 
 Para trabajar sobre otra base (por ejemplo, la de los tests del backend o la de E2E),
@@ -185,6 +187,9 @@ las verifica `tests/001_constraints.sql`.
 - No existe una llamada sin consentimiento, ni dos llamadas activas en la misma conversación.
 - La duración de la llamada se calcula, no se escribe.
 - No se duplican los embeddings de un mismo fragmento de un artículo.
+- **Aislamiento del RAG**: en `kb_chunks` solo puede entrar texto LITERAL del cuerpo vigente de
+  su artículo, con su hash correcto (trigger de la migración 013). Ni un bug del backend puede
+  meter el mensaje de un cliente en el índice con el que la IA responde a otros clientes.
 - Tokens (refresh y widget) guardados solo como hash; correos en minúsculas y únicos.
 - Borrar un cliente (derecho de supresión) borra en cascada sus conversaciones,
   mensajes, llamadas y escalamientos; los agentes no se borran, se desactivan.
@@ -207,9 +212,9 @@ idempotente (IDs fijos + `ON CONFLICT`): se puede ejecutar varias veces sin dupl
 **Base de conocimiento:** 11 artículos (bloqueo de tarjeta, cargo no reconocido,
 horarios, clave de la app, límites de transferencia, extractos, cajero que no entregó el
 dinero, PQR, compras internacionales): 9 publicados, 1 borrador y 1 archivado (estos dos
-**no** deben aparecer nunca en el RAG). Se siembran **sin embeddings**: `kb_chunks` queda
-vacía hasta que el worker de indexación del backend (Fase 3) los genere, igual que con
-un artículo nuevo.
+**no** deben aparecer nunca en el RAG). Se siembran **sin embeddings**: después del seed, en el
+backend se corre `npm run kb:reindex` una vez (indexa los 9 publicados; borrador y archivado
+quedan fuera).
 
 **Conversaciones** (una por cada estado relevante):
 
@@ -236,7 +241,8 @@ que un agente no ve las conversaciones de otro.
 scripts\test.bat
 ```
 
-Ejecuta `tests/001_constraints.sql`: 38 pruebas que intentan violar cada regla (y
+Ejecuta `tests/001_constraints.sql` (38 pruebas) y `tests/002_rag_provenance.sql` (6 pruebas del
+aislamiento del RAG). En total 44 pruebas que intentan violar cada regla (y
 verifican que la base lo impida con el código de error esperado) o comprueban un
 comportamiento (duración calculada, `updated_at`, borrado en cascada). Todo corre en una
 transacción que termina en `ROLLBACK`: no deja datos y funciona con o sin seed. Si una
