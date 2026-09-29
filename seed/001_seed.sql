@@ -46,12 +46,19 @@ INSERT INTO customers (id, display_name, email, phone, external_ref) VALUES
   ('b0000000-0000-4000-8000-000000000005', 'Jorge Herrera', NULL, '+573015550000', NULL)
 ON CONFLICT (id) DO NOTHING;
 
--- Sesión de widget del cliente anónimo. Token de prueba en claro:
--- "seed-widget-token-anonimo" (en la base solo queda su SHA-256).
-INSERT INTO widget_sessions (id, customer_id, token_hash, expires_at, user_agent) VALUES
+-- Sesión de widget del cliente anónimo, para demos y pruebas manuales. Token de
+-- prueba en claro: "wgt_seed-anonimo-cordillera" (en la base solo queda su SHA-256).
+-- Debe empezar con "wgt_" (formato que exige el backend desde la Fase 3).
+-- DO UPDATE: volver a correr el seed renueva el token y su vigencia (30 días) y
+-- la reactiva, así el token documentado siempre funciona en desarrollo.
+INSERT INTO widget_sessions (id, customer_id, token_hash, created_at, expires_at, user_agent) VALUES
   ('b1000000-0000-4000-8000-000000000003', 'b0000000-0000-4000-8000-000000000003',
-   encode(digest('seed-widget-token-anonimo', 'sha256'), 'hex'), now() + interval '30 days', 'Mozilla/5.0 (seed)')
-ON CONFLICT (id) DO NOTHING;
+   encode(digest('wgt_seed-anonimo-cordillera', 'sha256'), 'hex'), now(), now() + interval '30 days', 'Mozilla/5.0 (seed)')
+ON CONFLICT (id) DO UPDATE
+  SET token_hash = EXCLUDED.token_hash,
+      created_at = EXCLUDED.created_at,
+      expires_at = EXCLUDED.expires_at,
+      revoked_at = NULL;
 
 -- ---------------------------------------------------------------------------
 -- Base de conocimiento
