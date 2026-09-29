@@ -324,6 +324,10 @@ el canal de voz") y para el reporte de costos.
 | Un mensaje reenviado no se duplica | UNIQUE `(conversation_id, client_msg_id)` |
 | Solo los mensajes de agente tienen agente | CHECK en `messages` |
 | Un turno de voz siempre pertenece a una llamada | CHECK `channel`/`call_id` |
+| ...y a una llamada de **su misma** conversación | FK compuesta `(call_id, conversation_id)` → `calls (id, conversation_id)` |
+| El mensaje/llamada que dispara un escalamiento es de esa conversación | FKs compuestas en `escalations` |
+| Una sola llamada activa por conversación | Índice único parcial en `calls` |
+| Un agente no se une dos veces a la vez a la misma llamada | Índice único parcial en `call_participants` |
 | No hay llamada sin consentimiento | `consent_given_at NOT NULL` |
 | La duración no contradice los tiempos | Columna calculada |
 | Conversación atendida ⇒ tiene agente; cerrada ⇒ tiene fecha de cierre | CHECK en `conversations` |
@@ -339,11 +343,11 @@ el canal de voz") y para el reporte de costos.
 | Cola general: sin agente, en espera, por prioridad | `conversations (priority DESC, last_message_at) WHERE status = 'waiting_agent'` |
 | "Mis conversaciones" de un agente, recientes primero | `conversations (assigned_agent_id, status, last_message_at DESC)` |
 | Historial de un cliente | `conversations (customer_id, created_at DESC)` |
-| Mensajes de una conversación en orden | `messages (conversation_id, created_at)` |
+| Mensajes de una conversación en orden | `messages (conversation_id, created_at, id)` — `created_at` usa `clock_timestamp()` para que el mensaje del cliente y la respuesta de la IA, insertados en la misma transacción, no empaten |
 | Transcripción de una llamada | UNIQUE `call_transcript_segments (call_id, seq)` |
 | Llamadas de una conversación | `calls (conversation_id, started_at DESC)` |
-| Llamadas en curso | `calls (status) WHERE status IN ('connecting','in_progress','waiting_agent')` |
-| Escalamientos abiertos para la bandeja | `escalations (status, created_at) WHERE status IN ('open','assigned')` |
+| Llamadas en curso | `calls (status, started_at) WHERE status IN ('connecting','in_progress','waiting_agent')` |
+| Escalamientos abiertos para la bandeja | `escalations (priority DESC, created_at) WHERE status IN ('open','assigned')` (el estado va en el predicado, no como primera columna: así el índice entrega las filas ya ordenadas) |
 | Búsqueda semántica | HNSW `kb_chunks (embedding vector_cosine_ops)` |
 | Purga por retención | `calls (retain_until)` |
 | Consumo de IA de un cliente en una ventana | `ai_usage (customer_id, created_at)` |
