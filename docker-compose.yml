@@ -1,0 +1,46 @@
+# Postgres 16 + pgvector y Redis 7 para desarrollo local.
+#
+# Puertos del host elegidos para convivir con el Proyecto 1 (renta-ia usa
+# 5433 y 6379) y con un Postgres instalado localmente (5432):
+#   Postgres -> 5434   Redis -> 6380
+#
+# Redis se usa para: colas BullMQ, rate limiting, presencia de agentes y
+# pub/sub de la señalización WebRTC (Fase 5). BullMQ exige
+# maxmemory-policy noeviction: si Redis expulsara claves, se perderían trabajos.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: atencion_ia_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: atencion_ia
+    ports:
+      - "5434:5432"
+    volumes:
+      - atencion_ia_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d atencion_ia"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: atencion_ia_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - atencion_ia_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  atencion_ia_pgdata:
+  atencion_ia_redisdata:
