@@ -250,7 +250,10 @@ auditar el RAG.
 - `stt_provider` / `tts_provider`: qué proveedor se usó (`mock` en desarrollo).
 - Retención: `retain_until` (fecha a partir de la cual se purga la transcripción) y
   `audio_storage_key` (NULL por defecto: **el audio no se guarda** salvo que la política
-  lo pida). La política se documenta en la Fase 5 (`docs/privacy-voice.md`).
+  lo pida). La política está en `docs/privacy-voice.md` del backend: 90 días por defecto.
+- Desde la migración 014: `transcript_purged_at` (cuándo se purgó). CHECK: solo una llamada
+  terminada, y no antes de su fin. CHECK: `retain_until <= started_at + 180 días` (tope de
+  retención en el esquema). Trigger: una llamada purgada no acepta segmentos nuevos.
 
 **`call_participants`**: quién estuvo en la llamada y cuándo (`customer`, `ai`,
 `agent` + `agent_id`, `joined_at`, `left_at`). Es lo que registra que un agente "se unió"
@@ -259,7 +262,7 @@ a una llamada en curso.
 **`call_transcript_segments`**: la transcripción completa, en orden (`seq`), con
 `speaker` (`customer` | `ai` | `agent`), `text`, tiempos (`start_ms`, `end_ms`) y
 `message_id`: cada segmento **final** se convierte en un turno (`messages`) y queda
-enlazado. UNIQUE `(call_id, seq)`. Los resultados parciales del STT en streaming **no**
+enlazado (desde la 014, solo con un turno de la MISMA llamada: FK compuesta). UNIQUE `(call_id, seq)`. Los resultados parciales del STT en streaming **no**
 se guardan (solo viajan por WebSocket).
 
 ### 3.5 Escalamiento
@@ -336,6 +339,8 @@ el canal de voz") y para el reporte de costos.
 | Correos únicos sin trampa de mayúsculas | CHECK `lower()` + UNIQUE |
 | Tokens guardados solo como hash | CHECK `^[0-9a-f]{64}$` |
 | En el índice del RAG solo hay texto literal de artículos (versión vigente, hash correcto) | Trigger `trg_kb_chunks_provenance` (013) |
+| Un segmento de transcripción enlaza solo un turno de SU llamada | FK compuesta `(message_id, call_id) → messages(id, call_id)` (014) |
+| La transcripción no se conserva más de 180 días; una llamada purgada no recibe segmentos | CHECK `chk_calls_retention_max` + trigger (014) |
 | `updated_at` siempre correcto | Trigger `set_updated_at()` |
 
 ## 5. Consultas previsibles → índices
@@ -351,7 +356,7 @@ el canal de voz") y para el reporte de costos.
 | Llamadas en curso | `calls (status, started_at) WHERE status IN ('connecting','in_progress','waiting_agent')` |
 | Escalamientos abiertos para la bandeja | `escalations (priority DESC, created_at) WHERE status IN ('open','assigned')` (el estado va en el predicado, no como primera columna: así el índice entrega las filas ya ordenadas) |
 | Búsqueda semántica | HNSW `kb_chunks (embedding vector_cosine_ops)` |
-| Purga por retención | `calls (retain_until)` |
+| Purga por retención | `calls (retain_until) WHERE transcript_purged_at IS NULL` (014) |
 | Consumo de IA de un cliente en una ventana | `ai_usage (customer_id, created_at)` |
 | Todas las FK | Un índice por cada FK que no esté ya cubierta por otro índice compuesto |
 

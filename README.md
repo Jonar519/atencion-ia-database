@@ -32,12 +32,14 @@ atencion-ia-database/
 │   ├── 010_messages.sql         # Mensajes (texto y voz), citas del RAG, transcripción de llamadas
 │   ├── 011_escalations.sql      # Escalamientos: un solo abierto por conversación
 │   ├── 012_audit_and_usage.sql  # Log de auditoría y consumo de proveedores de IA/voz
-│   └── 013_kb_chunks_provenance.sql # Trigger: en el índice del RAG solo entra texto literal de artículos
+│   ├── 013_kb_chunks_provenance.sql # Trigger: en el índice del RAG solo entra texto literal de artículos
+│   └── 014_voice_hardening.sql  # Voz: transcripción solo de SU llamada, purga por retención, tope de 180 días
 ├── seed/
 │   └── 001_seed.sql             # Datos de prueba: "Banco Cordillera" (ficticio)
 ├── tests/
 │   ├── 001_constraints.sql      # 38 pruebas de las reglas del esquema (terminan en ROLLBACK)
-│   └── 002_rag_provenance.sql   # 6 pruebas del aislamiento del RAG (trigger de la 013)
+│   ├── 002_rag_provenance.sql   # 6 pruebas del aislamiento del RAG (trigger de la 013)
+│   └── 003_voice.sql            # 13 pruebas de las reglas de la voz (009 y 014)
 ├── scripts/
 │   ├── migrate.bat / migrate.sh # Aplica las migraciones pendientes (cmd.exe · bash/CI)
 │   ├── seed.bat / seed.sh       # Carga los datos de prueba
@@ -186,6 +188,10 @@ las verifica `tests/001_constraints.sql`.
 - Un turno de voz siempre tiene llamada, y esa llamada es de la misma conversación.
 - No existe una llamada sin consentimiento, ni dos llamadas activas en la misma conversación.
 - La duración de la llamada se calcula, no se escribe.
+- Un segmento de transcripción solo puede enlazar un turno de **su misma llamada** (FK compuesta,
+  migración 014): la transcripción de un cliente nunca queda pegada a la llamada de otro.
+- Retención de la voz: la transcripción se conserva como máximo 180 días (CHECK), solo se purga
+  una llamada terminada, y una llamada purgada no acepta segmentos nuevos (trigger, 014).
 - No se duplican los embeddings de un mismo fragmento de un artículo.
 - **Aislamiento del RAG**: en `kb_chunks` solo puede entrar texto LITERAL del cuerpo vigente de
   su artículo, con su hash correcto (trigger de la migración 013). Ni un bug del backend puede
@@ -244,8 +250,8 @@ que un agente no ve las conversaciones de otro.
 scripts\test.bat
 ```
 
-Ejecuta `tests/001_constraints.sql` (38 pruebas) y `tests/002_rag_provenance.sql` (6 pruebas del
-aislamiento del RAG). En total 44 pruebas que intentan violar cada regla (y
+Ejecuta `tests/001_constraints.sql` (38 pruebas), `tests/002_rag_provenance.sql` (6 pruebas del
+aislamiento del RAG) y `tests/003_voice.sql` (13 pruebas de la voz). En total 57 pruebas que intentan violar cada regla (y
 verifican que la base lo impida con el código de error esperado) o comprueban un
 comportamiento (duración calculada, `updated_at`, borrado en cascada). Todo corre en una
 transacción que termina en `ROLLBACK`: no deja datos y funciona con o sin seed. Si una
