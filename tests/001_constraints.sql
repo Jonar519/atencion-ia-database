@@ -261,18 +261,18 @@ INSERT INTO kb_articles (id, slug, title, body, category, status, published_at) 
   ('99999999-0000-4000-8000-0000000000f1', 'articulo-prueba', 'Prueba', 'Cuerpo', 'pruebas', 'published', now());
 
 INSERT INTO kb_chunks (article_id, article_version, chunk_index, content, content_sha256, embedding, embedding_model)
-  VALUES ('99999999-0000-4000-8000-0000000000f1', 1, 0, 'Cuerpo', repeat('b', 64),
+  VALUES ('99999999-0000-4000-8000-0000000000f1', 1, 0, 'Cuerpo', encode(digest('Cuerpo', 'sha256'), 'hex'),
           array_fill(0.1::real, ARRAY[1024])::vector, 'mock-embed-v1');
 
 SELECT pg_temp.expect_error('no se duplican embeddings del mismo fragmento y modelo', '23505', $sql$
   INSERT INTO kb_chunks (article_id, article_version, chunk_index, content, content_sha256, embedding, embedding_model)
-  VALUES ('99999999-0000-4000-8000-0000000000f1', 1, 0, 'Cuerpo', repeat('b', 64),
+  VALUES ('99999999-0000-4000-8000-0000000000f1', 1, 0, 'Cuerpo', encode(digest('Cuerpo', 'sha256'), 'hex'),
           array_fill(0.2::real, ARRAY[1024])::vector, 'mock-embed-v1')
 $sql$);
 
 SELECT pg_temp.expect_error('embedding con dimensión incorrecta', '22000', $sql$
   INSERT INTO kb_chunks (article_id, article_version, chunk_index, content, content_sha256, embedding, embedding_model)
-  VALUES ('99999999-0000-4000-8000-0000000000f1', 1, 1, 'Cuerpo', repeat('b', 64),
+  VALUES ('99999999-0000-4000-8000-0000000000f1', 1, 1, 'Cuerpo', encode(digest('Cuerpo', 'sha256'), 'hex'),
           array_fill(0.2::real, ARRAY[3])::vector, 'mock-embed-v1')
 $sql$);
 
