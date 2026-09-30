@@ -257,6 +257,18 @@ comportamiento (duración calculada, `updated_at`, borrado en cascada). Todo cor
 transacción que termina en `ROLLBACK`: no deja datos y funciona con o sin seed. Si una
 prueba falla, el script termina con código de salida distinto de 0 e indica cuál.
 
+## Integración continua
+
+`.github/workflows/ci.yml` corre en cada push, sobre un Postgres con pgvector limpio:
+
+1. Aplica las migraciones.
+2. Las aplica **otra vez**: la segunda corrida no debe aplicar ninguna.
+3. Verifica que todas quedaron registradas en `schema_migrations`.
+4. Carga el seed **dos veces** y comprueba los conteos (idempotente).
+5. Corre las pruebas del esquema (`scripts/test.sh`).
+
+También corre gitleaks sobre todo el historial.
+
 ## Producción (más adelante)
 
 El despliegue en AWS (RDS for PostgreSQL con pgvector, ElastiCache para Redis) se hace
