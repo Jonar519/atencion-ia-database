@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migrations:
+    name: Migraciones, seed y pruebas del esquema sobre una base limpia
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: atencion_ia
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/atencion_ia
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # El runner ubuntu-latest ya trae el cliente psql.
+      - name: Aplicar las migraciones sobre una base vacía
+        run: bash scripts/migrate.sh
+
+      - name: Segunda ejecución (debe saltar todas las migraciones)
+        run: |
+          bash scripts/migrate.sh | tee second-run.log
+          grep -q "Listo: 0 migración" second-run.log
+
+      - name: Todas las migraciones quedaron registradas
+        run: |
+          expected=$(find migrations -maxdepth 1 -name '*.sql' | wc -l)
+          actual=$(psql "$DATABASE_URL" -tAc 'SELECT count(*) FROM schema_migrations')
+          echo "migraciones: $expected · registradas: $actual"
+          test "$expected" = "$actual"
+
+      - name: Cargar el seed dos veces (debe ser idempotente)
+        run: |
+          bash scripts/seed.sh
+          bash scripts/seed.sh
+          check() { actual=$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM $1"); echo "$1: $actual (esperado $2)"; test "$actual" = "$2"; }
+          check staff_users 4
+          check customers 5
+          check kb_articles 11
+          check conversations 7
+          check messages 26
+          check escalations 4
+          check calls 1
+
+      # Pruebas que intentan ROMPER cada regla del esquema (CHECKs, índices
+      # únicos parciales, FKs compuestas, triggers de RAG y de voz) y exigen el
+      # error esperado. Cada archivo corre en una transacción con ROLLBACK.
+      - name: Pruebas del esquema (tests/*.sql)
+        run: bash scripts/test.sh
+
+  # Secretos en el historial (gitleaks), igual que en backend y frontend.
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: docker run --rm -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:v8.21.2 git /repo --redact --verbose
