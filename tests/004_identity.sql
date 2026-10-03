@@ -108,9 +108,10 @@ UPDATE staff_users SET deleted_at = now(), is_active = false, email = 'eliminado
 WHERE id = '99999999-0000-4000-8000-000000000071';
 SELECT pg_temp.expect_true('anonimizada correctamente (sin datos personales, inactiva)', true);
 
-SELECT pg_temp.expect_error('el tema solo admite system, light o dark', '23514', $sql$
-  UPDATE staff_users SET theme = 'rosa' WHERE id = '99999999-0000-4000-8000-000000000072'
-$sql$);
+-- Migración 019: el tema lo decide el sistema operativo; ya no existe una preferencia guardada.
+SELECT pg_temp.expect_true('no hay columna de tema: el tema lo decide el sistema operativo (019)',
+  NOT EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'staff_users' AND column_name = 'theme'));
 
 SELECT pg_temp.expect_error('un teléfono con letras se rechaza', '23514', $sql$
   UPDATE staff_users SET phone = 'llámame' WHERE id = '99999999-0000-4000-8000-000000000072'
