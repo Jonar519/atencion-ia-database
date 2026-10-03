@@ -33,13 +33,19 @@ atencion-ia-database/
 │   ├── 011_escalations.sql      # Escalamientos: un solo abierto por conversación
 │   ├── 012_audit_and_usage.sql  # Log de auditoría y consumo de proveedores de IA/voz
 │   ├── 013_kb_chunks_provenance.sql # Trigger: en el índice del RAG solo entra texto literal de artículos
-│   └── 014_voice_hardening.sql  # Voz: transcripción solo de SU llamada, purga por retención, tope de 180 días
+│   ├── 014_voice_hardening.sql  # Voz: transcripción solo de SU llamada, purga por retención, tope de 180 días
+│   ├── 015_staff_identity.sql   # Identidad del staff: MFA, tokens de un solo uso, correo simulado, IP truncada, anonimización
+│   ├── 016_canned_responses.sql # Respuestas predefinidas del panel (título y atajo únicos)
+│   └── 017_message_attachments.sql # Adjuntos del chat (imagen/PDF) y cola de borrado de archivos
 ├── seed/
 │   └── 001_seed.sql             # Datos de prueba: "Banco Cordillera" (ficticio)
 ├── tests/
 │   ├── 001_constraints.sql      # 38 pruebas de las reglas del esquema (terminan en ROLLBACK)
 │   ├── 002_rag_provenance.sql   # 6 pruebas del aislamiento del RAG (trigger de la 013)
-│   └── 003_voice.sql            # 13 pruebas de las reglas de la voz (009 y 014)
+│   ├── 003_voice.sql            # 13 pruebas de las reglas de la voz (009 y 014)
+│   ├── 004_identity.sql         # 18 pruebas de la identidad del staff (015)
+│   ├── 005_canned_responses.sql # 10 pruebas de las respuestas predefinidas (016)
+│   └── 006_attachments.sql      # 9 pruebas de los adjuntos (017)
 ├── scripts/
 │   ├── migrate.bat / migrate.sh # Aplica las migraciones pendientes (cmd.exe · bash/CI)
 │   ├── seed.bat / seed.sh       # Carga los datos de prueba
@@ -197,6 +203,15 @@ las verifica `tests/001_constraints.sql`.
   su artículo, con su hash correcto (trigger de la migración 013). Ni un bug del backend puede
   meter el mensaje de un cliente en el índice con el que la IA responde a otros clientes.
 - Tokens (refresh y widget) guardados solo como hash; correos en minúsculas y únicos.
+- **Identidad del staff (015)**: los enlaces de un solo uso (recuperar contraseña, confirmar correo,
+  pasos de MFA) guardan solo su hash, duran como máximo 30 min y hay a lo sumo UNO vigente por
+  persona y propósito (UNIQUE parcial). La IP de una sesión solo entra truncada (x.y.z.0 o /48).
+  La MFA no puede quedar "activa" sin secreto. Una cuenta anonimizada queda inactiva, con correo
+  `@anonimizado.invalid` y sin teléfono, foto ni secreto: no se puede reactivar.
+- **Adjuntos (017)**: un adjunto pertenece a un mensaje de SU misma conversación (FK compuesta),
+  uno por mensaje, solo PNG/JPEG/WebP/PDF de hasta 5 MB y con una clave de almacenamiento que no
+  puede salir de `attachments/`. Borrar el mensaje (o al cliente) encola el archivo para borrarlo
+  del almacenamiento (trigger → `storage_deletions`).
 - Borrar un cliente (derecho de supresión) borra en cascada sus conversaciones,
   mensajes, llamadas y escalamientos; los agentes no se borran, se desactivan.
 
@@ -251,7 +266,9 @@ scripts\test.bat
 ```
 
 Ejecuta `tests/001_constraints.sql` (38 pruebas), `tests/002_rag_provenance.sql` (6 pruebas del
-aislamiento del RAG) y `tests/003_voice.sql` (13 pruebas de la voz). En total 57 pruebas que intentan violar cada regla (y
+aislamiento del RAG), `tests/003_voice.sql` (13 pruebas de la voz) y `tests/004_identity.sql`
+(18 pruebas de la identidad del staff) `tests/005_canned_responses.sql` (10 de las respuestas
+predefinidas) y `tests/006_attachments.sql` (9 de los adjuntos). En total 94 pruebas que intentan violar cada regla (y
 verifican que la base lo impida con el código de error esperado) o comprueban un
 comportamiento (duración calculada, `updated_at`, borrado en cascada). Todo corre en una
 transacción que termina en `ROLLBACK`: no deja datos y funciona con o sin seed. Si una
