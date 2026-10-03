@@ -391,9 +391,9 @@ el canal de voz") y para el reporte de costos.
 | Audio | No se guarda por defecto | Ver política en la Fase 5 |
 | Archivos: adjuntos del chat y fotos de perfil (Fase 7) | Almacenamiento: carpeta local o S3 | La base guarda solo sus datos y la clave; ver §8 |
 
-## 8. Fase 7: identidad, respuestas predefinidas y adjuntos
+## 8. Fase 7: identidad, respuestas predefinidas, adjuntos e invitaciones
 
-Tres migraciones nuevas. Como en las fases anteriores, las reglas importantes las impone la base.
+Cinco migraciones nuevas. Como en las fases anteriores, las reglas importantes las impone la base.
 
 ```mermaid
 erDiagram
@@ -407,11 +407,13 @@ erDiagram
 
 | Migración | Qué agrega | Reglas que impone la base |
 |---|---|---|
-| **015** identidad del staff | `staff_users`: teléfono, tema, foto, secreto de MFA (cifrado), último paso TOTP usado, `deleted_at`. Tablas `staff_tokens`, `mfa_backup_codes` y `email_outbox` (correo simulado). `refresh_tokens`: IP y ubicación | Tokens solo como hash SHA-256, de **30 min como máximo**, **uno vigente** por persona y propósito (UNIQUE parcial). MFA activa ⇒ hay secreto. IP solo **truncada**. Una cuenta anonimizada queda inactiva y sin datos personales (no se puede reactivar) |
+| **015** identidad del staff | `staff_users`: teléfono, tema (eliminado en la 019: lo decide el sistema operativo), foto, secreto de MFA (cifrado), último paso TOTP usado, `deleted_at`. Tablas `staff_tokens`, `mfa_backup_codes` y `email_outbox` (correo simulado). `refresh_tokens`: IP y ubicación | Tokens solo como hash SHA-256, de **30 min como máximo**, **uno vigente** por persona y propósito (UNIQUE parcial). MFA activa ⇒ hay secreto. IP solo **truncada**. Una cuenta anonimizada queda inactiva y sin datos personales (no se puede reactivar) |
 | **016** respuestas predefinidas | `canned_responses` (título, texto, atajo, activa) | Título y atajo únicos (el título sin distinguir mayúsculas); atajo en formato `a-z0-9-`; quien la creó no se borra (`RESTRICT`: las cuentas se anonimizan) |
 | **017** adjuntos | `message_attachments` (tipo, tamaño, nombre para mostrar, SHA-256, clave) y `storage_deletions` | FK compuesta: el adjunto es de un mensaje de **su** conversación; uno por mensaje; solo PNG/JPEG/WebP/PDF de hasta 5 MB; la clave la genera el servidor y no puede salir de `attachments/`. Un trigger encola el archivo para borrarlo cuando se borra el mensaje (o el cliente, en cascada) |
+| **018** invitaciones | `staff_users`: `password_hash` admite NULL (= invitación pendiente), `invited_at`, `invited_by`, `activated_at`. `staff_tokens`: propósito `invitation` | Sin contraseña ⇒ pendiente (inactiva, sin MFA ni inicios de sesión, sin anonimizar); activada ⇒ con contraseña y después de la invitación. La invitación vive ≤ 72 h (los demás tokens, ≤ 30 min). Trigger: invitación ⇔ cuenta pendiente |
+| **019** tema | Elimina `staff_users.theme` | El tema lo decide el sistema operativo: no hay preferencia que guardar |
 
 El **nombre original** de un adjunto solo se muestra: nunca llega a la IA, porque lo escribe quien
 sube el archivo y podría traer instrucciones. Pruebas: `tests/004_identity.sql` (18),
-`tests/005_canned_responses.sql` (10) y `tests/006_attachments.sql` (9).
+`tests/005_canned_responses.sql` (10), `tests/006_attachments.sql` (9) y `tests/007_invitations.sql` (18).
 

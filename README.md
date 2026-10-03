@@ -36,7 +36,9 @@ atencion-ia-database/
 │   ├── 014_voice_hardening.sql  # Voz: transcripción solo de SU llamada, purga por retención, tope de 180 días
 │   ├── 015_staff_identity.sql   # Identidad del staff: MFA, tokens de un solo uso, correo simulado, IP truncada, anonimización
 │   ├── 016_canned_responses.sql # Respuestas predefinidas del panel (título y atajo únicos)
-│   └── 017_message_attachments.sql # Adjuntos del chat (imagen/PDF) y cola de borrado de archivos
+│   ├── 017_message_attachments.sql # Adjuntos del chat (imagen/PDF) y cola de borrado de archivos
+│   ├── 018_staff_invitations.sql # Alta SOLO por invitación: cuenta pendiente sin contraseña, enlace de 72 h
+│   └── 019_drop_staff_theme.sql # Quita la preferencia de tema (lo decide el sistema operativo)
 ├── seed/
 │   └── 001_seed.sql             # Datos de prueba: "Banco Cordillera" (ficticio)
 ├── tests/
@@ -45,7 +47,8 @@ atencion-ia-database/
 │   ├── 003_voice.sql            # 13 pruebas de las reglas de la voz (009 y 014)
 │   ├── 004_identity.sql         # 18 pruebas de la identidad del staff (015)
 │   ├── 005_canned_responses.sql # 10 pruebas de las respuestas predefinidas (016)
-│   └── 006_attachments.sql      # 9 pruebas de los adjuntos (017)
+│   ├── 006_attachments.sql      # 9 pruebas de los adjuntos (017)
+│   └── 007_invitations.sql      # 18 pruebas de las invitaciones (018)
 ├── scripts/
 │   ├── migrate.bat / migrate.sh # Aplica las migraciones pendientes (cmd.exe · bash/CI)
 │   ├── seed.bat / seed.sh       # Carga los datos de prueba
@@ -212,6 +215,12 @@ las verifica `tests/001_constraints.sql`.
   uno por mensaje, solo PNG/JPEG/WebP/PDF de hasta 5 MB y con una clave de almacenamiento que no
   puede salir de `attachments/`. Borrar el mensaje (o al cliente) encola el archivo para borrarlo
   del almacenamiento (trigger → `storage_deletions`).
+- **Invitaciones (018)**: la única forma de tener cuenta. Una cuenta sin contraseña es una
+  invitación pendiente: inactiva, sin MFA, sin inicios de sesión y sin anonimizar; ni una cuenta del
+  seed ni una ya completada pueden quedarse sin contraseña. El enlace de invitación vive como máximo
+  72 h (los demás, 30 min), y un trigger impone que una invitación solo sea de una cuenta pendiente
+  y que una cuenta pendiente solo tenga invitaciones (ni recuperación ni pasos de MFA).
+- **Tema (019)**: no hay preferencia de tema guardada; la app sigue el tema del sistema operativo.
 - Borrar un cliente (derecho de supresión) borra en cascada sus conversaciones,
   mensajes, llamadas y escalamientos; los agentes no se borran, se desactivan.
 
@@ -268,11 +277,16 @@ scripts\test.bat
 Ejecuta `tests/001_constraints.sql` (38 pruebas), `tests/002_rag_provenance.sql` (6 pruebas del
 aislamiento del RAG), `tests/003_voice.sql` (13 pruebas de la voz) y `tests/004_identity.sql`
 (18 pruebas de la identidad del staff) `tests/005_canned_responses.sql` (10 de las respuestas
-predefinidas) y `tests/006_attachments.sql` (9 de los adjuntos). En total 94 pruebas que intentan violar cada regla (y
+predefinidas), `tests/006_attachments.sql` (9 de los adjuntos) y `tests/007_invitations.sql` (18 de las
+invitaciones). En total 112 pruebas que intentan violar cada regla (y
 verifican que la base lo impida con el código de error esperado) o comprueban un
 comportamiento (duración calculada, `updated_at`, borrado en cascada). Todo corre en una
 transacción que termina en `ROLLBACK`: no deja datos y funciona con o sin seed. Si una
 prueba falla, el script termina con código de salida distinto de 0 e indica cuál.
+
+> `test.bat` usa por defecto la base de desarrollo (`atencion_ia`): aunque cada prueba termina en
+> ROLLBACK, avanza sus secuencias. Para no tocarla, corre las pruebas en una base desechable
+> (`createdb` + `set DB_NAME=…` + `migrate.bat` + `seed.bat` + `test.bat`), como la CI.
 
 ## Integración continua
 
