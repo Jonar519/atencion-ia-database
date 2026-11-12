@@ -1,308 +1,198 @@
-# atencion-ia-database
+# atencion-ia-database: la base de datos de Atención IA
 
-Esquema, migraciones, pruebas y datos de prueba de la base de datos de **Atención al
-cliente omnicanal con IA** (chat de texto + llamada de voz WebRTC, con escalamiento a un
-agente humano). Este repositorio es la **única fuente de verdad** sobre la estructura de
-la base de datos: cualquier cambio de esquema se hace aquí, con una migración SQL nueva
-y numerada, nunca directamente sobre la base ni desde el backend.
+Este repositorio es la **única fuente de verdad** del esquema de PostgreSQL de **Atención IA**: las
+migraciones SQL, los datos de prueba (seed) y las pruebas del esquema. Ningún otro repositorio crea
+ni modifica tablas. La **guía completa para evaluar el proyecto** (acceso, roles y la prueba de cada
+función paso a paso) está en el README principal, en
+[atencion-ia-backend](https://github.com/Jonar519/atencion-ia-backend#readme).
 
-## Relación con los otros repositorios
+## Contenido
 
-| Repositorio | Cómo depende de este |
-|---|---|
-| `atencion-ia-backend` | Lee el esquema con `npx prisma db pull` (Prisma solo como cliente, no gestiona migraciones). Sus tests de integración aplican las migraciones de `../atencion-ia-database/migrations`, así que **las tres carpetas deben ser hermanas**. Usa el Redis de este `docker-compose.yml`. |
-| `atencion-ia-frontend` | No depende directamente: habla solo con el backend. |
+1. [Qué es](#1-qué-es)
+2. [Cómo funciona](#2-cómo-funciona)
+3. [Tecnologías](#3-tecnologías)
+4. [Qué se necesita](#4-qué-se-necesita)
+5. [Acceso y roles](#5-acceso-y-roles)
+6. [Guía de pruebas de la base](#6-guía-de-pruebas-de-la-base)
+7. [Pruebas automatizadas](#7-pruebas-automatizadas)
+8. [Limitaciones y decisiones de diseño](#8-limitaciones-y-decisiones-de-diseño)
+9. [Solución de problemas](#9-solución-de-problemas)
+10. [Estructura del repositorio](#10-estructura-del-repositorio)
+11. [Glosario](#11-glosario)
 
-Este repo no depende de ninguno de los otros dos.
+## 1. Qué es
 
-## Contenido del repositorio
+La base guarda todo lo que el sistema necesita: el equipo (asesores y administradores) y su
+seguridad (sesiones, verificación en dos pasos, invitaciones), los clientes anónimos y sus sesiones
+del chat, la base de conocimiento con sus embeddings para la búsqueda por significado, las
+conversaciones, los mensajes de texto y de voz, las llamadas con su consentimiento y transcripción,
+los escalamientos, los adjuntos, las respuestas predefinidas, la auditoría y el consumo de los
+servicios de IA y voz.
 
+Además, **protege las reglas importantes por sí misma** (con restricciones, índices y triggers), de
+modo que se cumplen aunque el código del backend tenga un error. Por ejemplo: un solo escalamiento
+abierto por conversación, ninguna llamada sin consentimiento y, en el índice que usa la IA, solo
+texto literal de los artículos.
+
+## 2. Cómo funciona
+
+- **Migraciones numeradas** (`migrations/001_…sql` a `019_…sql`): cada cambio del esquema es un
+  archivo SQL nuevo que se aplica una sola vez, en orden. La tabla `schema_migrations` registra cuáles
+  ya se aplicaron, así que correr el script de nuevo no repite nada.
+- **El backend no migra:** lee el esquema con Prisma (solo como cliente) y sus tests aplican estas
+  mismas migraciones en una base desechable. Por eso los tres repositorios deben estar en carpetas
+  hermanas.
+- **Seed** (`seed/001_seed.sql`): datos ficticios de "Banco Cordillera" para desarrollo; se puede
+  cargar varias veces sin duplicar y **nunca** se carga en producción.
+- **Pruebas del esquema** (`tests/*.sql`): intentan romper cada regla dentro de una transacción que
+  termina en `ROLLBACK` (no dejan datos).
+
+```mermaid
+erDiagram
+  STAFF_USERS ||--o{ CONVERSATIONS : "atiende"
+  CUSTOMERS ||--o{ WIDGET_SESSIONS : "tiene"
+  CUSTOMERS ||--o{ CONVERSATIONS : "abre"
+  CONVERSATIONS ||--o{ MESSAGES : "contiene"
+  CONVERSATIONS ||--o{ CALLS : "tiene"
+  CONVERSATIONS ||--o{ ESCALATIONS : "escala"
+  CALLS ||--o{ CALL_TRANSCRIPT_SEGMENTS : "transcribe"
+  MESSAGES ||--o| MESSAGE_ATTACHMENTS : "adjunta"
+  KB_ARTICLES ||--o{ KB_CHUNKS : "se divide en"
 ```
-atencion-ia-database/
-├── migrations/                  # SQL numerado, se aplica en orden
-│   ├── 001_extensions.sql       # pgcrypto, pgvector
-│   ├── 002_enums.sql            # Todos los tipos enumerados, documentados
-│   ├── 003_functions.sql        # set_updated_at() para los triggers
-│   ├── 004_staff_users.sql      # Agentes y administradores
-│   ├── 005_auth.sql             # Refresh tokens rotativos (solo hash) y bloqueo progresivo de login
-│   ├── 006_customers.sql        # Clientes finales (sin contraseña) y sesiones del widget
-│   ├── 007_knowledge_base.sql   # Artículos y fragmentos con embedding (vector(1024), índice HNSW)
-│   ├── 008_conversations.sql    # Conversaciones: estado, agente asignado, prioridad
-│   ├── 009_calls.sql            # Llamadas (consentimiento, duración calculada, retención) y participantes
-│   ├── 010_messages.sql         # Mensajes (texto y voz), citas del RAG, transcripción de llamadas
-│   ├── 011_escalations.sql      # Escalamientos: un solo abierto por conversación
-│   ├── 012_audit_and_usage.sql  # Log de auditoría y consumo de proveedores de IA/voz
-│   ├── 013_kb_chunks_provenance.sql # Trigger: en el índice del RAG solo entra texto literal de artículos
-│   ├── 014_voice_hardening.sql  # Voz: transcripción solo de SU llamada, purga por retención, tope de 180 días
-│   ├── 015_staff_identity.sql   # Identidad del staff: MFA, tokens de un solo uso, correo simulado, IP truncada, anonimización
-│   ├── 016_canned_responses.sql # Respuestas predefinidas del panel (título y atajo únicos)
-│   ├── 017_message_attachments.sql # Adjuntos del chat (imagen/PDF) y cola de borrado de archivos
-│   ├── 018_staff_invitations.sql # Alta SOLO por invitación: cuenta pendiente sin contraseña, enlace de 72 h
-│   └── 019_drop_staff_theme.sql # Quita la preferencia de tema (lo decide el sistema operativo)
-├── seed/
-│   └── 001_seed.sql             # Datos de prueba: "Banco Cordillera" (ficticio)
-├── tests/
-│   ├── 001_constraints.sql      # 38 pruebas de las reglas del esquema (terminan en ROLLBACK)
-│   ├── 002_rag_provenance.sql   # 6 pruebas del aislamiento del RAG (trigger de la 013)
-│   ├── 003_voice.sql            # 13 pruebas de las reglas de la voz (009 y 014)
-│   ├── 004_identity.sql         # 18 pruebas de la identidad del staff (015)
-│   ├── 005_canned_responses.sql # 10 pruebas de las respuestas predefinidas (016)
-│   ├── 006_attachments.sql      # 9 pruebas de los adjuntos (017)
-│   └── 007_invitations.sql      # 18 pruebas de las invitaciones (018)
-├── scripts/
-│   ├── migrate.bat / migrate.sh # Aplica las migraciones pendientes (cmd.exe · bash/CI)
-│   ├── seed.bat / seed.sh       # Carga los datos de prueba
-│   └── test.bat / test.sh       # Ejecuta las pruebas del esquema
-├── docs/
-│   └── domain-model.md          # Modelo de dominio, diagrama ER, reglas e índices
-└── docker-compose.yml           # Postgres 16 + pgvector y Redis 7
-```
 
-## Servicios y puertos
+El modelo completo, con todas las tablas, el diagrama entidad-relación y los índices, está en
+[docs/domain-model.md](docs/domain-model.md). La lista de reglas garantizadas por la base, en la
+[referencia técnica](docs/referencia-tecnica.md#reglas-que-garantiza-la-propia-base).
 
-| Servicio | Contenedor | Puerto del host | Credenciales / notas |
-|---|---|---|---|
-| PostgreSQL 16 + pgvector 0.8 | `atencion_ia_postgres` | **5434** (→ 5432) | `postgres` / `postgres`, base `atencion_ia` |
-| Redis 7 | `atencion_ia_redis` | **6380** (→ 6379) | Sin contraseña (solo desarrollo). `noeviction` + AOF |
+## 3. Tecnologías
 
-Los puertos se eligieron para convivir con el Proyecto 1 (`renta-ia` usa 5433 y 6379) y
-con un Postgres instalado localmente en el 5432.
+| Tecnología                      | Versión                                     | Para qué se usa                                                     | Por qué se eligió                                                                                     |
+| ------------------------------- | ------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **PostgreSQL**                  | 16 (imagen `pgvector/pgvector:pg16`)        | Base de datos relacional                                            | CHECK, índices únicos parciales, FKs compuestas, columnas calculadas y triggers para proteger reglas. |
+| **pgvector**                    | incluida en la imagen (índice HNSW)          | Embeddings de 1024 dimensiones y búsqueda por similitud             | Datos y vectores en la misma base, con transacciones.                                                 |
+| **pgcrypto**                    | extensión de PostgreSQL                     | `gen_random_uuid()` y hashes                                        | Identificadores y hashes generados en la base.                                                        |
+| **Redis**                       | 7 (imagen `redis:7-alpine`)                 | Colas, límites de uso y pub/sub del backend (solo en desarrollo aquí) | El mismo `docker-compose.yml` levanta todo lo que el backend necesita.                              |
+| **Docker Compose**              | —                                           | Levanta PostgreSQL (puerto 5434) y Redis (6380) en desarrollo       | Mismo entorno en cualquier equipo.                                                                    |
+| **SQL puro** + scripts `.bat`/`.sh` | —                                       | Migraciones, seed y pruebas                                         | Sin ORM gestionando el esquema: lo que se revisa es exactamente lo que corre.                        |
+| **GitHub Actions** · **gitleaks** | gitleaks en la CI                         | Base limpia, migraciones dos veces, seed dos veces, pruebas y secretos | Cada `push` demuestra que el esquema se crea de cero y que las reglas se cumplen.                   |
+| **Railway**                     | —                                           | PostgreSQL con pgvector y Redis en producción                       | Mismo proyecto que la API, con red privada.                                                           |
 
-Redis se usa para: colas BullMQ (por eso `maxmemory-policy noeviction`: si Redis
-expulsara claves se perderían trabajos), rate limiting, presencia de agentes y pub/sub
-de la señalización WebRTC (Fase 5).
+## 4. Qué se necesita
 
-## Cómo levantar la base de datos en local
-
-### Windows (cmd.exe): no necesita `psql` instalado
-
-Los `.bat` ejecutan `psql` **dentro del contenedor** (`docker exec`). Solo necesitas
-Docker Desktop corriendo.
+- **Para evaluar en producción:** nada de este repositorio; solo el navegador (ver
+  [Qué necesita el profesor](https://github.com/Jonar519/atencion-ia-backend#4-qué-necesita-el-profesor)).
+- **Para levantar la base en local:** Docker Desktop en marcha. En Windows (`cmd.exe`) no hace falta
+  `psql`: los scripts `.bat` lo usan dentro del contenedor. En Linux o macOS se necesita el cliente
+  `psql`.
 
 ```bat
-:: 1. Levantar Postgres + pgvector y Redis
+cd atencion-ia-database
 docker compose up -d
-
-:: 2. Esperar a que ambos digan "(healthy)"
-docker compose ps
-
-:: 3. Aplicar las migraciones pendientes
 scripts\migrate.bat
-
-:: 4. (Opcional) cargar datos de prueba
 scripts\seed.bat
-
-:: 5. (Opcional) ejecutar las pruebas del esquema
-scripts\test.bat
 ```
 
-Salida esperada del paso 3 la primera vez: `Listo: 13 migracion(es) nueva(s)
-aplicada(s).` Las siguientes veces: `Listo: 0 ...` (las ya aplicadas se saltan).
-
-Para trabajar sobre otra base (por ejemplo, la de los tests del backend o la de E2E),
-créala una vez y define `DB_NAME` antes de los scripts:
-
-```bat
-docker exec atencion_ia_postgres psql -U postgres -c "CREATE DATABASE atencion_ia_test"
-set DB_NAME=atencion_ia_test
-scripts\migrate.bat
-```
-
-Para explorar la base a mano:
-
-```bat
-docker exec -it atencion_ia_postgres psql -U postgres -d atencion_ia
-```
-
-Comandos útiles dentro de `psql`: `\dt` (tablas), `\d+ conversations` (columnas,
-índices, CHECKs y FKs de una tabla), `\dT+` (enums), `\q` (salir).
-
-### Linux / macOS / CI: requiere `psql` en el host
+En Linux o macOS:
 
 ```bash
+cd atencion-ia-database
 docker compose up -d
 export DATABASE_URL="postgresql://postgres:postgres@localhost:5434/atencion_ia"
 ./scripts/migrate.sh
 ./scripts/seed.sh
-./scripts/test.sh
 ```
 
-### Empezar de cero
+Esperado: `docker compose ps` muestra `atencion_ia_postgres` y `atencion_ia_redis` en ejecución; la
+migración termina con `Listo: N migracion(es) nueva(s) aplicada(s).` y el seed con
+`Datos de prueba cargados correctamente.` Valores de conexión de desarrollo (solo locales):
 
-```bat
-:: Borra los contenedores Y sus volúmenes (se pierden todos los datos)
-docker compose down -v
-docker compose up -d
-scripts\migrate.bat
-scripts\seed.bat
+```ini
+DATABASE_URL=postgresql://postgres:postgres@localhost:5434/atencion_ia
+REDIS_URL=redis://localhost:6380
 ```
 
-## Historial de migraciones (`schema_migrations`)
+Después sigue con el backend y el frontend:
+[opción local](https://github.com/Jonar519/atencion-ia-backend#b-opción-local-opcional).
 
-Existe **desde la primera ejecución**: los scripts registran cada migración aplicada
-(`filename`, `applied_at`) y **saltan las que ya corrieron**, así que `migrate` se puede
-ejecutar cuantas veces se quiera. Cada migración y su registro corren en **una sola
-transacción**: si una falla, no queda aplicada a medias ni marcada como aplicada.
+## 5. Acceso y roles
 
-```sql
-SELECT filename, applied_at FROM schema_migrations ORDER BY filename;
+Los roles del equipo son dos (`admin` y `agent`, tipo `staff_role`); los clientes no tienen cuenta,
+solo sesiones anónimas. Cómo se entra a la aplicación, las invitaciones y la verificación en dos
+pasos: [Acceso y roles](https://github.com/Jonar519/atencion-ia-backend#5-acceso-y-roles). Las
+cuentas del seed (listadas en la
+[referencia técnica](docs/referencia-tecnica.md#datos-de-prueba-seed)) **solo existen en local**: en
+producción no se carga el seed.
+
+## 6. Guía de pruebas de la base
+
+Con la base local levantada (sección 4). Las funciones de la aplicación se prueban con la
+[guía principal](https://github.com/Jonar519/atencion-ia-backend#6-guía-de-pruebas-función-por-función).
+
+| Función                         | Qué hace                                                 | Pasos para probarla                                                                                                                                                              | Resultado esperado                                                                                         |
+| ------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Migraciones repetibles          | Aplica solo lo pendiente                                 | Corre `scripts\migrate.bat` dos veces                                                                                                                                            | La segunda vez lista cada archivo como `ya aplicada` y termina con `Listo: 0 migracion(es) nueva(s) aplicada(s).` |
+| Seed idempotente                | Recargar los datos de prueba no los duplica              | Corre `scripts\seed.bat` dos veces y cuenta: `docker exec atencion_ia_postgres psql -U postgres -d atencion_ia -At -c "SELECT count(*) FROM kb_articles"`                         | `11` las dos veces (9 publicados, 1 borrador y 1 archivado).                                               |
+| Pruebas del esquema             | Intenta romper cada regla                                | `scripts\test.bat` (o `./scripts/test.sh`)                                                                                                                                       | Recorre los 7 archivos de `tests/` y termina con `Todas las pruebas del esquema pasaron.`                  |
+| Regla: duración calculada       | La duración de una llamada no se puede escribir          | `docker exec atencion_ia_postgres psql -U postgres -d atencion_ia -c "BEGIN; UPDATE calls SET duration_seconds = 5; ROLLBACK;"`                                                  | `ERROR: column "duration_seconds" can only be updated to DEFAULT` (es una columna calculada).              |
+| Regla: correos en minúsculas    | La base rechaza un correo con mayúsculas                 | `docker exec atencion_ia_postgres psql -U postgres -d atencion_ia -c "BEGIN; INSERT INTO staff_users (name, email, role, password_hash) VALUES ('Prueba','MAYUS@ejemplo.com','agent','x'); ROLLBACK;"` | `ERROR: new row for relation "staff_users" violates check constraint "staff_users_email_check"`.          |
+| Modelo de datos                 | Documenta tablas, relaciones e índices                   | Abre [docs/domain-model.md](docs/domain-model.md)                                                                                                                                | Diagrama entidad-relación y cada regla con la migración que la crea.                                       |
+
+## 7. Pruebas automatizadas
+
+| Comando                                       | Qué cubre                                                                                                                                                         | Resultado esperado                         |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `scripts\test.bat` o `./scripts/test.sh`      | **112 pruebas** en 7 archivos: 38 de reglas generales, 6 de aislamiento del RAG, 13 de voz, 18 de identidad del equipo, 10 de respuestas predefinidas, 9 de adjuntos y 18 de invitaciones | `Todas las pruebas del esquema pasaron.`  |
+| CI (`.github/workflows/`)                     | Base **limpia**, migraciones dos veces (la segunda no aplica nada), seed dos veces con conteos, pruebas del esquema y gitleaks                                    | En verde en cada `push`.                   |
+
+Además, los tests de integración del backend aplican estas migraciones reales en su propia base.
+
+## 8. Limitaciones y decisiones de diseño
+
+- **El seed es solo para desarrollo:** contiene contraseñas de prueba públicas y nunca se ejecuta en
+  producción. Por eso la base de conocimiento de producción empieza vacía.
+- **Los artículos del seed vienen sin embeddings:** hay que indexarlos desde el backend
+  (`npm run kb:reindex`), porque los vectores dependen del modelo de embeddings configurado.
+- **Prisma no gestiona el esquema:** nunca `prisma migrate` ni `prisma db push`; los cambios son
+  migraciones SQL nuevas aquí.
+- **Las migraciones no corren solas en producción:** se aplican a mano con el mismo script antes de
+  desplegar el backend.
+- **Redis sin contraseña** en el `docker-compose.yml`: solo para desarrollo local.
+
+## 9. Solución de problemas
+
+| Síntoma                                                  | Qué hacer                                                                                                     |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `docker compose up -d` falla: el puerto 5434 o 6380 está ocupado | Otro servicio usa ese puerto: detenlo o cambia el puerto publicado en `docker-compose.yml` (y en el `.env` del backend). |
+| `ERROR: no se pudo conectar a la base atencion_ia en el contenedor…` | Docker Desktop no está en marcha o falta `docker compose up -d`: levántalo y espera a que el contenedor esté `healthy`. |
+| `migrate.sh` o `seed.sh`: `psql: command not found`      | Instala el cliente de PostgreSQL, o usa los `.bat` en Windows.                                                 |
+| `ERROR: define la variable de entorno DATABASE_URL`      | En Linux o macOS: `export DATABASE_URL="postgresql://postgres:postgres@localhost:5434/atencion_ia"`.           |
+| `ERROR al aplicar <archivo>.sql`                         | La migración no se registra y se puede corregir y repetir. Las migraciones ya aplicadas no se editan: un cambio nuevo es un archivo nuevo. Para empezar de cero, ver la [referencia técnica](docs/referencia-tecnica.md#empezar-de-cero). |
+
+## 10. Estructura del repositorio
+
+```
+atencion-ia-database/
+├── migrations/          # 001 … 019: extensiones, tipos, tablas, reglas y triggers, en orden
+├── seed/001_seed.sql    # datos ficticios de Banco Cordillera (solo desarrollo)
+├── tests/               # 7 archivos de pruebas del esquema (terminan en ROLLBACK)
+├── scripts/             # migrate, seed y test, en .bat (Windows) y .sh (Linux, macOS y CI)
+├── docs/
+│   ├── domain-model.md        # modelo de dominio, diagrama ER, reglas e índices
+│   └── referencia-tecnica.md  # detalle de cada archivo, puertos, migraciones, seed y CI
+└── docker-compose.yml   # PostgreSQL 16 + pgvector y Redis 7
 ```
 
-## Convención de migraciones
+## 11. Glosario
 
-- Archivos `0NN_descripcion.sql`, en orden. Una migración **nunca se modifica** después
-  de haberse aplicado en un entorno compartido: un cambio de esquema siempre es una
-  migración nueva.
-- Cada archivo empieza con un comentario que explica **por qué** existe cada tabla,
-  restricción o índice no obvio.
-- No usar `CREATE INDEX CONCURRENTLY`: los scripts ejecutan cada archivo dentro de una
-  transacción, y `CONCURRENTLY` no puede correr dentro de una.
-- Añadir un valor a un enum: `ALTER TYPE … ADD VALUE` en una migración nueva (el valor
-  nuevo no se puede usar en la misma transacción).
-- El backend refleja este esquema con `npx prisma db pull`: cualquier cambio aquí
-  implica volver a hacer el `pull` allá.
+| Término                  | Qué significa aquí                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| **Migración**            | Archivo SQL numerado que cambia el esquema; se aplica una vez y queda registrado.                          |
+| **Seed**                 | Datos de prueba que se cargan en una base de desarrollo.                                                   |
+| **Idempotente**          | Que se puede ejecutar varias veces con el mismo resultado (sin duplicar).                                  |
+| **CHECK / índice único parcial** | Reglas de la base: una condición que toda fila debe cumplir / unicidad solo entre filas que cumplen una condición (por ejemplo, escalamientos abiertos). |
+| **Trigger**              | Función que la base ejecuta sola al insertar o cambiar filas.                                              |
+| **Embedding / pgvector** | Lista de números que representa el significado de un texto / extensión que los guarda y compara.           |
+| **HNSW**                 | Tipo de índice de pgvector para encontrar rápido los vectores más parecidos.                               |
 
-## Modelo de datos
-
-El diseño completo (diagrama ER, máquina de estados, reglas y consultas previstas) está
-en [`docs/domain-model.md`](docs/domain-model.md). Resumen:
-
-| Tabla | Descripción |
-|---|---|
-| `staff_users` | Agentes y administradores (los únicos con contraseña) |
-| `refresh_tokens` | Sesiones del staff: hash del refresh token, familia de rotación, revocación |
-| `login_attempts` | Fallos de login por cuenta (clave = SHA-256 del correo) para el bloqueo progresivo |
-| `customers` | Clientes finales; todos los datos de contacto son opcionales |
-| `widget_sessions` | Cómo se identifica un cliente sin contraseña (hash del token del widget) |
-| `kb_articles` | Base de conocimiento; solo los `published` alimentan el RAG |
-| `kb_chunks` | Fragmentos de artículos con su embedding (`vector(1024)`, HNSW coseno) |
-| `conversations` | Hilo de atención: `ai_active` → `waiting_agent` → `agent_active` → `closed` |
-| `messages` | Turnos de texto **y de voz** (`channel`), con intención y sentimiento por turno |
-| `message_citations` | Qué artículos/fragmentos usó la IA en cada respuesta |
-| `calls` | Llamadas de voz: consentimiento, tiempos, duración calculada, retención |
-| `call_participants` | Quién estuvo en la llamada (cliente, IA, agentes que se unieron) |
-| `call_transcript_segments` | Transcripción final, en orden; cada segmento enlaza a su turno |
-| `escalations` | Paso de IA a humano, con la señal que lo disparó |
-| `audit_log` | Quién hizo qué, sobre qué y cuándo (sin datos sensibles) |
-| `ai_usage` | Consumo de proveedores de IA/voz, para topes de gasto y reporte de costos |
-| `schema_migrations` | Historial de migraciones aplicadas (lo gestionan los scripts) |
-
-### Reglas que garantiza la propia base
-
-No dependen de que el backend "se acuerde": están en CHECKs, UNIQUEs parciales y FKs, y
-las verifica `tests/001_constraints.sql`.
-
-- Un solo escalamiento abierto por conversación (el backend usa `ON CONFLICT DO NOTHING`).
-- Un mensaje reenviado tras reconectar el WebSocket no se duplica (`client_msg_id`).
-- Un turno de voz siempre tiene llamada, y esa llamada es de la misma conversación.
-- No existe una llamada sin consentimiento, ni dos llamadas activas en la misma conversación.
-- La duración de la llamada se calcula, no se escribe.
-- Un segmento de transcripción solo puede enlazar un turno de **su misma llamada** (FK compuesta,
-  migración 014): la transcripción de un cliente nunca queda pegada a la llamada de otro.
-- Retención de la voz: la transcripción se conserva como máximo 180 días (CHECK), solo se purga
-  una llamada terminada, y una llamada purgada no acepta segmentos nuevos (trigger, 014).
-- No se duplican los embeddings de un mismo fragmento de un artículo.
-- **Aislamiento del RAG**: en `kb_chunks` solo puede entrar texto LITERAL del cuerpo vigente de
-  su artículo, con su hash correcto (trigger de la migración 013). Ni un bug del backend puede
-  meter el mensaje de un cliente en el índice con el que la IA responde a otros clientes.
-- Tokens (refresh y widget) guardados solo como hash; correos en minúsculas y únicos.
-- **Identidad del staff (015)**: los enlaces de un solo uso (recuperar contraseña, confirmar correo,
-  pasos de MFA) guardan solo su hash, duran como máximo 30 min y hay a lo sumo UNO vigente por
-  persona y propósito (UNIQUE parcial). La IP de una sesión solo entra truncada (x.y.z.0 o /48).
-  La MFA no puede quedar "activa" sin secreto. Una cuenta anonimizada queda inactiva, con correo
-  `@anonimizado.invalid` y sin teléfono, foto ni secreto: no se puede reactivar.
-- **Adjuntos (017)**: un adjunto pertenece a un mensaje de SU misma conversación (FK compuesta),
-  uno por mensaje, solo PNG/JPEG/WebP/PDF de hasta 5 MB y con una clave de almacenamiento que no
-  puede salir de `attachments/`. Borrar el mensaje (o al cliente) encola el archivo para borrarlo
-  del almacenamiento (trigger → `storage_deletions`).
-- **Invitaciones (018)**: la única forma de tener cuenta. Una cuenta sin contraseña es una
-  invitación pendiente: inactiva, sin MFA, sin inicios de sesión y sin anonimizar; ni una cuenta del
-  seed ni una ya completada pueden quedarse sin contraseña. El enlace de invitación vive como máximo
-  72 h (los demás, 30 min), y un trigger impone que una invitación solo sea de una cuenta pendiente
-  y que una cuenta pendiente solo tenga invitaciones (ni recuperación ni pasos de MFA).
-- **Tema (019)**: no hay preferencia de tema guardada; la app sigue el tema del sistema operativo.
-- Borrar un cliente (derecho de supresión) borra en cascada sus conversaciones,
-  mensajes, llamadas y escalamientos; los agentes no se borran, se desactivan.
-
-## Datos de prueba (seed)
-
-`seed/001_seed.sql` crea los datos de un banco ficticio, **Banco Cordillera**. Es
-idempotente (IDs fijos + `ON CONFLICT`): se puede ejecutar varias veces sin duplicar.
-**No debe ejecutarse en producción.**
-
-**Staff** (contraseña de todos: `Password123!`):
-
-| Nombre | Correo | Rol | Estado |
-|---|---|---|---|
-| Admin Soporte | `admin@cordillera.example` | admin | disponible |
-| Laura Méndez | `laura@cordillera.example` | agent | disponible |
-| Diego Rojas | `diego@cordillera.example` | agent | ocupado |
-| Sofía Pardo | `sofia@cordillera.example` | agent | **desactivada** (no puede entrar) |
-
-**Sesión de widget de prueba** (cliente anónimo `b0000000-…-0003`): token `wgt_seed-anonimo-cordillera`.
-Volver a correr el seed la renueva por 30 días. La usa la demo del backend (`docs/demo-fase3.md`).
-
-**Base de conocimiento:** 11 artículos (bloqueo de tarjeta, cargo no reconocido,
-horarios, clave de la app, límites de transferencia, extractos, cajero que no entregó el
-dinero, PQR, compras internacionales): 9 publicados, 1 borrador y 1 archivado (estos dos
-**no** deben aparecer nunca en el RAG). Se siembran **sin embeddings**: después del seed, en el
-backend se corre `npm run kb:reindex` una vez (indexa los 9 publicados; borrador y archivado
-quedan fuera).
-
-**Conversaciones** (una por cada estado relevante):
-
-| Asunto | Estado | Canal | Agente | Escalamiento |
-|---|---|---|---|---|
-| Horario de oficinas | `ai_active` | texto | — | — |
-| Cargo no reconocido | `waiting_agent` (prioridad 90) | texto | — | abierto (regla: posible fraude) |
-| Reclamo por retiro en cajero | `agent_active` | texto | Laura | asignado (el cliente pidió un humano) |
-| Aumento de límite de transferencias | `agent_active` | texto | Diego | asignado |
-| Descargar extracto | `closed` (resuelta por la IA) | texto | — | — |
-| Clave de la app bloqueada | `closed` (resuelta por agente) | texto | Diego | resuelto (fallo repetido) |
-| Consulta por llamada: compras internacionales | `closed` (resuelta por la IA) | **voz** | — | — |
-
-La conversación de voz incluye su llamada (duración 122 s, proveedores `mock`), los dos
-participantes, 4 segmentos de transcripción y los 4 turnos correspondientes en
-`messages` con `channel = 'voice'`.
-
-Laura y Diego tienen conversaciones distintas asignadas: sirve para probar en la Fase 2
-que un agente no ve las conversaciones de otro.
-
-## Pruebas del esquema
-
-```bat
-scripts\test.bat
-```
-
-Ejecuta `tests/001_constraints.sql` (38 pruebas), `tests/002_rag_provenance.sql` (6 pruebas del
-aislamiento del RAG), `tests/003_voice.sql` (13 pruebas de la voz) y `tests/004_identity.sql`
-(18 pruebas de la identidad del staff) `tests/005_canned_responses.sql` (10 de las respuestas
-predefinidas), `tests/006_attachments.sql` (9 de los adjuntos) y `tests/007_invitations.sql` (18 de las
-invitaciones). En total 112 pruebas que intentan violar cada regla (y
-verifican que la base lo impida con el código de error esperado) o comprueban un
-comportamiento (duración calculada, `updated_at`, borrado en cascada). Todo corre en una
-transacción que termina en `ROLLBACK`: no deja datos y funciona con o sin seed. Si una
-prueba falla, el script termina con código de salida distinto de 0 e indica cuál.
-
-> `test.bat` usa por defecto la base de desarrollo (`atencion_ia`): aunque cada prueba termina en
-> ROLLBACK, avanza sus secuencias. Para no tocarla, corre las pruebas en una base desechable
-> (`createdb` + `set DB_NAME=…` + `migrate.bat` + `seed.bat` + `test.bat`), como la CI.
-
-## Integración continua
-
-`.github/workflows/ci.yml` corre en cada push, sobre un Postgres con pgvector limpio:
-
-1. Aplica las migraciones.
-2. Las aplica **otra vez**: la segunda corrida no debe aplicar ninguna.
-3. Verifica que todas quedaron registradas en `schema_migrations`.
-4. Carga el seed **dos veces** y comprueba los conteos (idempotente).
-5. Corre las pruebas del esquema (`scripts/test.sh`).
-
-También corre gitleaks sobre todo el historial.
-
-## Producción (más adelante)
-
-El despliegue en AWS (RDS for PostgreSQL con pgvector, ElastiCache para Redis) se hace
-al final de la materia. Las migraciones se aplican igual, con `migrate.sh` y un
-`DATABASE_URL` apuntando a RDS; antes de la primera, el usuario maestro debe crear las
-extensiones `pgcrypto` y `vector`.
+El glosario completo del proyecto está en el
+[README principal](https://github.com/Jonar519/atencion-ia-backend#11-glosario).
